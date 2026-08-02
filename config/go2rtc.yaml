@@ -1,0 +1,46 @@
+# go2rtc — configuración del media gateway (Fase 2)
+# Servicio: ~/.config/systemd/user/go2rtc.service (usuario <USER>)
+# UI/API:   http://<SERVER_IP>:1984   ·   RTSP out: <SERVER_IP>:8554
+
+log:
+  level: info
+  format: text
+
+api:
+  listen: ":1984"       # API + WebUI + WebRTC/WHEP
+  username: ""          # (opcional) proteger el API
+  password: ""
+  origin: "*"           # CORS: permite que el dashboard (:8000) lea el signaling WebRTC
+
+rtsp:
+  listen: ":8554"       # salida RTSP para ffmpeg/Frigate/etc.
+
+webrtc:
+  listen: ":8555"       # conexiones WebRTC (TCP/UDP)
+
+streams:
+  # Cámaras ATSG — main (HD, H.264 1280x720) y sub (SD, 640x360)
+  cam01:   eseecloud://admin:@<CAM_IP>:80/livestream/11
+  cam01sd: eseecloud://admin:@<CAM_IP>:80/livestream/12
+  cam02:   eseecloud://admin:@<CAM_IP>:80/livestream/11
+  cam02sd: eseecloud://admin:@<CAM_IP>:80/livestream/12
+  cam03:   eseecloud://admin:@<CAM_IP>:80/livestream/11
+  cam03sd: eseecloud://admin:@<CAM_IP>:80/livestream/12
+  cam04:   eseecloud://admin:@<CAM_IP>:80/livestream/11
+  cam04sd: eseecloud://admin:@<CAM_IP>:80/livestream/12
+
+  # Transcode a MJPEG (H.264 -> MJPEG vía ffmpeg). go2rtc NO transcodifica a
+  # MJPEG automáticamente: la fuente debe contener codec MJPEG. Estos streams
+  # alimentan el fallback MJPEG del dashboard (/api/stream.mjpeg?src=cam0Nsdmjpeg).
+  # Solo se activan cuando hay consumidor; 10 fps para ahorrar CPU.
+  cam01mjpeg:   ffmpeg:cam01#video=mjpeg#width=640#fps=15
+  cam01sdmjpeg: ffmpeg:cam01sd#video=mjpeg#width=640#fps=15
+  cam02mjpeg:   ffmpeg:cam02#video=mjpeg#width=640#fps=15
+  cam02sdmjpeg: ffmpeg:cam02sd#video=mjpeg#width=640#fps=15
+  cam03mjpeg:   ffmpeg:cam03#video=mjpeg#width=640#fps=15
+  cam03sdmjpeg: ffmpeg:cam03sd#video=mjpeg#width=640#fps=15
+  cam04mjpeg:   ffmpeg:cam04#video=mjpeg#width=640#fps=15
+  cam04sdmjpeg: ffmpeg:cam04sd#video=mjpeg#width=640#fps=15
+
+  # Alternativa por protocolo bubble (mismo video, otro ingreso)
+  # cam01bubble: bubble://admin:@<CAM_IP>:80/bubble/live?ch=0&stream=0
