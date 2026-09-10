@@ -7,9 +7,25 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 
-# Logs
+# Go2rtc logs / temp
 *.log
 
-# Sensibles (no incluidos en repo público)
+# Secretos locales (.env con la stream key de Twitch)
 backend/.env
+backend/static/
+
+# Datos sensibles: IPs/MACs reales y DBs locales
+cameras.db
+backend/*.db
 backend/data/
+*.db
+
+# Scripts de RE con IPs/credenciales hardcodeadas
+scripts/bubble_sniffer.py
+scripts/eseecloud_audio.py
+scripts/recon/*.json
+scripts/recon/scan_network.py
+scripts/recon/probe_*.py
+scripts/recon/fullport.py
+scripts/recon/ptz_probe.py
+scripts/recon/ptz.sh

@@ -6,18 +6,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import subprocess
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import Response, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import cameras, crypto
 from .config import ADMIN_TOKEN, ROOT_DIR
 from .db import get_db, init_db
 from .motion import motion_loop
+from .stream_monitor import stream_monitor_loop
 from . import twitch as twitch_mgr
+from . import camera_audio
 
 FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
 
@@ -100,21 +104,90 @@ def health(_: None = Depends(require_token)):
 @app.get("/api/status")
 def status(_: None = Depends(require_token)):
     g2 = cameras.check_go2rtc()
+    health = cameras.stream_health_map()
     out = []
     with get_db() as db:
         rows = db.execute(
-            "SELECT id, name, ip, main_stream, sub_stream, enabled FROM cameras ORDER BY id"
+            "SELECT id, name, ip, main_stream, sub_stream, enabled FROM cameras ORDER BY display_order, id"
         ).fetchall()
+        states = {}
+        for r in db.execute("SELECT camera_id, live_since, last_cut_at FROM camera_stream_state").fetchall():
+            states[r["camera_id"]] = {"live_since": r["live_since"], "last_cut_at": r["last_cut_at"]}
     for r in rows:
         stream = r["sub_stream"] or r["main_stream"]
-        st = {"ok": False, "status": 0, "bytes": 0}
-        if stream:
+        st = health.get(stream) or {"ok": False, "status": 0, "bytes": 0}
+        if stream and not st["ok"]:
             st = cameras.check_stream(stream)
+        cam_state = states.get(r["id"], {"live_since": 0, "last_cut_at": 0})
         out.append({
             "id": r["id"], "name": r["name"], "ip": r["ip"],
             "enabled": bool(r["enabled"]), "stream": stream, **st,
+            "live_since": cam_state["live_since"], "last_cut_at": cam_state["last_cut_at"],
         })
     return {"go2rtc": g2, "cameras": out}
+
+
+# --------------------------------------------------------------------------- network identity
+
+def _run(cmd: list[str]) -> str:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _parse_ssid() -> str:
+    out = _run(["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,STATE", "connection", "show", "--active"])
+    for line in out.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 2 and "802-11-wireless" in parts[1]:
+            return parts[0]
+    out2 = _run(["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
+    for line in out2.splitlines():
+        if line.startswith("sí:") or line.startswith("yes:"):
+            return line.split(":", 1)[1]
+    return ""
+
+
+def _parse_signal() -> int:
+    out = _run(["nmcli", "-t", "-f", "ACTIVE,SIGNAL", "dev", "wifi"])
+    for line in out.splitlines():
+        if line.startswith("sí:") or line.startswith("yes:"):
+            try:
+                return int(line.split(":")[1])
+            except (IndexError, ValueError):
+                pass
+    return 0
+
+
+def _parse_gateway() -> str:
+    out = _run(["ip", "route", "show", "default"])
+    m = re.search(r"via (\d+\.\d+\.\d+\.\d+)", out)
+    return m.group(1) if m else ""
+
+
+def _parse_host_ip() -> str:
+    out = _run(["ip", "-4", "-o", "addr", "show"])
+    for line in out.splitlines():
+        if "wlan0" in line or "eth0" in line or "enp4s0" in line:
+            m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", line)
+            if m:
+                return m.group(1)
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", out)
+    return m.group(1) if m else ""
+
+
+@app.get("/api/network")
+def network_info(_: None = Depends(require_token)):
+    gw = _parse_gateway()
+    return {
+        "ssid": _parse_ssid(),
+        "signal": _parse_signal(),
+        "gateway": gw,
+        "host_ip": _parse_host_ip(),
+        "routers": [gw] if gw else [],
+    }
 
 
 # --------------------------------------------------------------------------- cameras CRUD
@@ -122,8 +195,23 @@ def status(_: None = Depends(require_token)):
 @app.get("/api/cameras")
 def list_cameras(_: None = Depends(require_token)):
     with get_db() as db:
-        rows = db.execute("SELECT * FROM cameras ORDER BY id").fetchall()
+        rows = db.execute("SELECT * FROM cameras ORDER BY display_order, id").fetchall()
     return [cameras.row_to_dict(r) for r in rows]
+
+
+class ReorderIn(BaseModel):
+    order: list[int]
+
+
+@app.patch("/api/cameras/reorder")
+def reorder_cameras(body: ReorderIn, _: None = Depends(require_token)):
+    with get_db() as db:
+        for i, cid in enumerate(body.order):
+            db.execute(
+                "UPDATE cameras SET display_order=?, updated_at=datetime('now') WHERE id=?",
+                (i, cid),
+            )
+    return {"ok": True}
 
 
 @app.get("/api/cameras/{cid}")
@@ -204,6 +292,27 @@ def camera_snapshot(cid: int, _: None = Depends(require_token)):
                     headers={"Cache-Control": "no-store"})
 
 
+# --------------------------------------------------------------------------- camera audio (streaming)
+
+@app.get("/api/cameras/{cid}/audio")
+def camera_audio_stream(cid: int):
+    """Stream live MP3 audio from camera (chunked, for <audio> elements)."""
+    with get_db() as conn:
+        row = conn.execute("SELECT ip FROM cameras WHERE id=?", (cid,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Cámara no encontrada")
+    ip = row["ip"]
+
+    def generate():
+        yield from camera_audio.manager.get_audio_iter(cid, ip)
+
+    return StreamingResponse(
+        generate(),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/cameras/{cid}/ptz")
 def camera_ptz(cid: int, body: PtzCmd, _: None = Depends(require_token)):
     row = _load_camera(cid)
@@ -268,6 +377,10 @@ class TwitchConfig(BaseModel):
     key: str | None = None
     url: str | None = None
     audio: str | None = None
+    audio_source: str | None = None
+    audio_camera_id: int | None = None
+    audio_device: str | None = None
+    audio_gain: str | None = None
     bitrate: str | None = None
     width: int | None = None
     height: int | None = None
@@ -301,12 +414,19 @@ def twitch_get_config(_: None = Depends(require_token)):
 @app.put("/api/twitch/config")
 def twitch_set_config(body: TwitchConfig, _: None = Depends(require_token)):
     twitch_mgr.save_config(
-        key=body.key, url=body.url, audio=body.audio, bitrate=body.bitrate,
-        width=body.width, height=body.height,
+        key=body.key, url=body.url, audio=body.audio,
+        audio_source=body.audio_source, audio_camera_id=body.audio_camera_id,
+        audio_device=body.audio_device, audio_gain=body.audio_gain,
+        bitrate=body.bitrate, width=body.width, height=body.height,
     )
     cfg = twitch_mgr.get_config()
     cfg.pop("key_set", None)
     return cfg
+
+
+@app.get("/api/twitch/audio-devices")
+def twitch_audio_devices(_: None = Depends(require_token)):
+    return {"devices": twitch_mgr.list_audio_devices()}
 
 
 # --------------------------------------------------------------------------- settings / skins
@@ -364,18 +484,24 @@ HTML_PLACEHOLDER = Response(
 # --------------------------------------------------------------------------- arranque
 
 _motion_task: asyncio.Task | None = None
+_stream_monitor_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
 def startup():
     init_db()
-    global _motion_task
+    global _motion_task, _stream_monitor_task
     if _motion_task is None:
         _motion_task = asyncio.create_task(motion_loop())
+    if _stream_monitor_task is None:
+        _stream_monitor_task = asyncio.create_task(stream_monitor_loop())
 
 
 @app.on_event("shutdown")
 def shutdown():
-    global _motion_task
+    global _motion_task, _stream_monitor_task
     if _motion_task:
         _motion_task.cancel()
+    if _stream_monitor_task:
+        _stream_monitor_task.cancel()
+    camera_audio.manager.shutdown_all()

@@ -1,0 +1,53 @@
+/* ============================================================================
+   SENTINEL V1.0.0 — CSS de skins original
+   ============================================================================
+   Este archivo contiene los bloques CSS de las 5 skins originales (v1.0.0).
+   Fueron reemplazados por los bloques de modos en SENTINEL V2.
+   
+   Para referencia histórica. NO se importa en el código activo de V2.
+   ============================================================================ */
+
+/* Skin Noche */
+[data-skin='noche'] {
+  --bg: 11 18 32;
+  --panel: 21 30 48;
+  --fg: 226 232 240;
+  --muted: 148 163 184;
+  --accent: 34 211 238;
+}
+
+/* Skin Día */
+[data-skin='dia'] {
+  --bg: 241 245 249;
+  --panel: 255 255 255;
+  --fg: 15 23 42;
+  --muted: 100 116 139;
+  --accent: 14 116 144;
+}
+
+/* Skin Verde */
+[data-skin='verde'] {
+  --bg: 7 20 18;
+  --panel: 15 35 30;
+  --fg: 220 240 232;
+  --muted: 140 170 160;
+  --accent: 52 211 153;
+}
+
+/* Skin Violeta */
+[data-skin='violeta'] {
+  --bg: 17 12 32;
+  --panel: 28 22 50;
+  --fg: 232 226 244;
+  --muted: 160 150 190;
+  --accent: 167 139 250;
+}
+
+/* Skin Mono */
+[data-skin='mono'] {
+  --bg: 10 10 12;
+  --panel: 22 22 26;
+  --fg: 235 235 240;
+  --muted: 140 140 150;
+  --accent: 220 220 230;
+}

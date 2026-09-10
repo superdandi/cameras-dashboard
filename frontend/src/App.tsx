@@ -1,36 +1,43 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Camera, CamStatus } from './types';
 import { api } from './api';
-import CameraTile from './components/CameraTile';
-import DetailView from './components/DetailView';
-import InventoryPanel from './components/InventoryPanel';
-import SettingsPanel, { applySkin, SKINS } from './components/SettingsPanel';
-import EventsPanel from './components/EventsPanel';
-import TwitchPanel from './components/TwitchPanel';
+import { ModeContext, type Mode } from './modes/types';
+import { MODES } from './modes/registry';
 
 type View = 'grid' | 'inventory' | 'settings' | 'events' | 'twitch';
-
-const MODE_SKINS: Record<string, string> = { cyberpunk: 'cyberpunk', vigilancia: 'vigilancia' };
 
 export default function App() {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [status, setStatus] = useState<Record<number, CamStatus>>({});
   const [selected, setSelected] = useState<Camera | null>(null);
+  const [detailSolo, setDetailSolo] = useState(false);
+  const [gridSelectedId, setGridSelectedId] = useState<number | null>(null);
   const [view, setView] = useState<View>('grid');
   const [cols, setCols] = useState(2);
   const [g2rOk, setG2rOk] = useState<boolean | null>(null);
+  const [g2rStreams, setG2rStreams] = useState<string[]>([]);
   const [hd, setHd] = useState(() => localStorage.getItem('camHd') === '1');
+  const [mode, setMode] = useState<Mode>('cyberpunk');
   const [brand, setBrand] = useState('SENTINEL');
-  const [skin, setSkin] = useState('cyberpunk');
+  const [bootVisible, setBootVisible] = useState(true);
+  const orderRef = useRef<number[]>([]);
+
+  const components = MODES[mode];
 
   const refresh = useCallback(async () => {
     try {
       const [cam, st] = await Promise.all([api.listCameras(), api.status()]);
+      // Preserve local reorder if user dragged recently
+      if (orderRef.current.length > 0) {
+        const orderMap = new Map(orderRef.current.map((id, i) => [id, i]));
+        cam.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
+      }
       setCameras(cam);
       const m: Record<number, CamStatus> = {};
       st.cameras.forEach((c) => { m[c.id] = c; });
       setStatus(m);
       setG2rOk(st.go2rtc.ok);
+      setG2rStreams(st.go2rtc.streams);
     } catch (e) {
       console.error(e);
     }
@@ -44,7 +51,11 @@ export default function App() {
 
   useEffect(() => {
     api.getSettings().then((s) => {
-      if (s.skin) { setSkin(s.skin); applySkin(s.skin); }
+      if (s.mode) {
+        setMode(s.mode as Mode);
+      } else if (s.skin) {
+        setMode('cyberpunk');
+      }
       if (s.grid_cols) setCols(Number(s.grid_cols));
       if (s.brand) setBrand(s.brand);
     }).catch(() => {});
@@ -52,100 +63,158 @@ export default function App() {
 
   useEffect(() => {
     document.title = `${brand} // Dashboard`;
-  }, [brand]);
+    document.documentElement.setAttribute('data-mode', mode);
+  }, [brand, mode]);
 
   const toggleMode = async () => {
-    const next = skin === 'cyberpunk' ? 'vigilancia' : 'cyberpunk';
-    setSkin(next);
-    applySkin(next);
-    await api.setSetting('skin', next);
+    const next = mode === 'cyberpunk' ? 'vigilancia' : 'cyberpunk';
+    setMode(next);
+    setBootVisible(true);
+    document.documentElement.setAttribute('data-mode', next);
+    await api.setSetting('mode', next);
   };
 
+  const handleLayoutChange = useCallback((n: number) => {
+    setCols(n);
+    api.setSetting('grid_cols', String(n));
+  }, []);
+
+  const handleReorder = useCallback((reordered: Camera[]) => {
+    orderRef.current = reordered.map((c) => c.id);
+    setCameras((prev) => {
+      const enabled = reordered;
+      const disabled = prev.filter((c) => !c.enabled);
+      return [...enabled, ...disabled];
+    });
+  }, []);
+
   const active = cameras.filter((c) => c.enabled);
-  const gridClass = cols === 1 ? 'grid-cols-1' : cols === 4 ? 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4' : 'grid-cols-1 sm:grid-cols-2';
+
+  const handleSelect = useCallback((c: Camera) => {
+    setSelected(c);
+    setGridSelectedId(c.id);
+    setDetailSolo(false);
+  }, []);
+
+  // Keyboard coordination: Enter opens solo view, Escape exits solo first,
+  // then closes detail modal, then clears grid selection
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        const isTyping = (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLButtonElement);
+        if (selected && !detailSolo && !isTyping) {
+          e.preventDefault();
+          setDetailSolo(true);
+        }
+        return;
+      }
+      if (e.key !== 'Escape') return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (selected) {
+        e.preventDefault();
+        if (detailSolo) {
+          setDetailSolo(false);
+          return;
+        }
+        setSelected(null);
+        setGridSelectedId(null);
+        return;
+      }
+      setGridSelectedId(null);
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [selected, detailSolo]);
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-muted/20 px-4 py-2">
-        <div className="flex items-center gap-2">
-          <h1 style={{ fontFamily: 'var(--font-display)' }} className="text-lg font-bold tracking-wider text-accent">
-            {brand}
-          </h1>
-          <span className="hidden text-xs text-muted sm:inline">
-            {active.length} cámaras activas · <HOSTNAME>
-          </span>
-        </div>
-        <nav className="flex items-center gap-1 text-sm">
-          <button
-            onClick={toggleMode}
-            title={`Modo ${skin === 'cyberpunk' ? 'Vigilancia' : 'Cyberpunk'}`}
-            className={`rounded-lg px-3 py-1.5 font-mono text-xs uppercase tracking-widest ${skin === 'cyberpunk' ? 'bg-accent/20 text-accent' : 'bg-muted/10 text-muted hover:bg-muted/20'}`}
-          >
-            {skin === 'cyberpunk' ? '⚡ CYP' : '◉ OPS'}
-          </button>
-          <button
-            onClick={() => {
-              const v = !hd;
-              setHd(v);
-              localStorage.setItem('camHd', v ? '1' : '0');
-            }}
-            title="Ver el stream principal (HD) en lugar del sub-stream (SD)"
-            className={`rounded-lg px-3 py-1.5 ${hd ? 'bg-accent text-black' : 'text-muted hover:bg-muted/10'}`}
-          >
-            HD
-          </button>
-          {(['grid', 'events', 'inventory', 'twitch', 'settings'] as View[]).map((v) => (
+    <ModeContext.Provider value={{ mode, setMode }}>
+      <div className="flex h-full flex-col">
+        {/* Header */}
+        <header className={`header ${mode}`}>
+          <div className="header-brand">
+            <h1 className="header-title">{brand}</h1>
+            <span className="header-subtitle">
+              {active.length} CAMS ONLINE // <span className="text-accent">{mode === 'cyberpunk' ? 'CYP' : 'OPS'}</span>
+            </span>
+          </div>
+          <nav className="header-nav">
             <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`rounded-lg px-3 py-1.5 capitalize ${view === v ? 'bg-accent text-black' : 'text-muted hover:bg-muted/10'}`}
+              onClick={toggleMode}
+              title={`Modo ${mode === 'cyberpunk' ? 'Vigilancia' : 'Cyberpunk'}`}
+              className={`header-mode-btn ${mode}`}
             >
-              {v === 'grid' ? 'En vivo' : v === 'events' ? 'Eventos' : v === 'inventory' ? 'Inventario' : v === 'twitch' ? 'Twitch' : 'Personalizar'}
+              {mode === 'cyberpunk' ? '◉ OPS' : '⚡ CYP'}
             </button>
-          ))}
-        </nav>
-      </header>
+            <button
+              onClick={() => {
+                const v = !hd;
+                setHd(v);
+                localStorage.setItem('camHd', v ? '1' : '0');
+              }}
+              title="Ver el stream principal (HD) en lugar del sub-stream (SD)"
+              className={`header-hd-btn ${hd ? 'active' : ''}`}
+            >
+              HD
+            </button>
+            {(['grid', 'events', 'inventory', 'twitch', 'settings'] as View[]).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`header-nav-btn ${view === v ? 'active' : ''}`}
+              >
+                {v === 'grid' ? 'En vivo' : v === 'events' ? 'Eventos' : v === 'inventory' ? 'Inventario' : v === 'twitch' ? 'Twitch' : 'Personalizar'}
+              </button>
+            ))}
+          </nav>
+        </header>
 
-      <main className="flex-1 overflow-y-auto p-4">
-        {view === 'grid' && (
-          <div className="mx-auto max-w-7xl">
-            {g2rOk === false && (
-              <div className="mb-3 rounded-lg bg-amber-500/15 px-3 py-2 text-sm text-amber-300">
-                ⚠ go2rtc no responde en 127.0.0.1:1984. Verifica el servicio (systemctl --user status go2rtc).
-              </div>
-            )}
-            {active.length === 0 ? (
-              <div className="py-16 text-center text-muted">
-                No hay cámaras habilitadas. Ve a <b>Inventario</b> para añadirlas.
-              </div>
-            ) : (
-              <div className={`grid gap-3 ${gridClass}`}>
-                {active.map((c) => (
-                  <CameraTile key={c.id} camera={c} active preferMain={hd} onSelect={setSelected} />
-                ))}
-              </div>
-            )}
-          </div>
+        {/* Main content */}
+        <main className="flex-1 overflow-y-auto p-4">
+          {view === 'grid' && (
+            <components.Grid
+              cameras={active}
+              status={status}
+              cols={cols}
+              preferMain={hd}
+              g2rOk={g2rOk}
+              g2rStreams={g2rStreams}
+              bootVisible={bootVisible}
+              onBootDone={() => setBootVisible(false)}
+              onSelect={handleSelect}
+              onLayoutChange={handleLayoutChange}
+              onReorder={handleReorder}
+              selectedId={gridSelectedId}
+              onSelectedChange={setGridSelectedId}
+              modalOpen={!!selected}
+            />
+          )}
+
+          {view === 'inventory' && <components.Inventory onChanged={refresh} onReorder={handleReorder} />}
+          {view === 'events' && (
+            <div className="mx-auto max-w-3xl">
+              <components.Events />
+            </div>
+          )}
+          {view === 'twitch' && <components.Twitch />}
+          {view === 'settings' && (
+            <div className="mx-auto max-w-2xl">
+              <components.Settings />
+            </div>
+          )}
+        </main>
+
+        {/* Detail modal */}
+        {selected && (
+          <components.Detail
+            camera={selected}
+            preferMain={hd}
+            onClose={() => { setSelected(null); setDetailSolo(false); }}
+            status={status[selected.id]}
+            solo={detailSolo}
+            onSoloChange={setDetailSolo}
+          />
         )}
-
-        {view === 'inventory' && <InventoryPanel onChanged={refresh} />}
-
-        {view === 'events' && (
-          <div className="mx-auto max-w-3xl">
-            <EventsPanel />
-          </div>
-        )}
-
-        {view === 'twitch' && <TwitchPanel />}
-
-        {view === 'settings' && (
-          <div className="mx-auto max-w-2xl">
-            <SettingsPanel />
-          </div>
-        )}
-      </main>
-
-      {selected && <DetailView camera={selected} preferMain={hd} onClose={() => setSelected(null)} />}
-    </div>
+      </div>
+    </ModeContext.Provider>
   );
 }

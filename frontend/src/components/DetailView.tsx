@@ -16,7 +16,7 @@ const DIRS: [string, string][] = [
 ];
 
 export default function DetailView({ camera, preferMain, onClose }: Props) {
-  const { videoRef, mode, error } = useCameraStream(camera, true, preferMain);
+  const { videoRef, mode, error, mjpegSrc } = useCameraStream(camera, true, preferMain);
   const [speed, setSpeed] = useState(40);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -62,8 +62,11 @@ export default function DetailView({ camera, preferMain, onClose }: Props) {
 
         <div className="grid gap-4 p-4 lg:grid-cols-[1fr_auto]">
           <div className="relative aspect-video overflow-hidden rounded-xl bg-black">
-            {mode === 'webrtc' && <video ref={videoRef} muted autoPlay playsInline className="h-full w-full object-contain" />}
-            {mode !== 'webrtc' && (
+            <video ref={videoRef} muted autoPlay playsInline className="h-full w-full object-contain" style={{ display: mode === 'webrtc' ? '' : 'none' }} />
+            {mode === 'mjpeg' && (
+              <img src={mjpegSrc} alt={camera.name} className="h-full w-full object-contain" />
+            )}
+            {mode === 'off' && (
               <img src={snapshotUrl(camera.id)} alt={camera.name} className="h-full w-full object-contain" />
             )}
             <span className="absolute left-2 top-2 rounded bg-black/60 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-300">

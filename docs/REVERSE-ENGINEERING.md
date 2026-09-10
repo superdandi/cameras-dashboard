@@ -45,6 +45,13 @@ GET http://IP/cgi-bin/hi3510/preset.cgi?-act=set&-status=0&-number=<n>&-chn=1
 | Pan `right` 2s | 0.595 | **movimiento real** |
 | Pan `right` 2s (segunda) | 0.514 | movimiento real |
 | Tras `goto` preset | 0.55–0.67 | vuelve parcial (no exacto) |
+| `zoomin` 5s speed 63 (LOBBY `.91`) | 0.964 | **NO hay zoom óptico** (≈ línea base) |
+| `zoomout` 3s speed 63 (LOBBY `.91`) | 0.950 | NO hay zoom óptico |
+
+> **Zoom**: el CGI acepta `zoomin`/`zoomout` (`[Success] ptz ok`) pero el lente **no se
+> mueve** — estas cámaras ATSG no tienen motor de zoom óptico. El "zoom" de la app
+> EseeCloud es **digital** (recorte en cliente). Solución: zoom digital en el frontend
+> (`transform: scale()` sobre el vídeo/imagen), no vía PTZ.
 
 ### Solo `ptzctrl.cgi` y `preset.cgi` están expuestos
 Los demás CGIs del firmware (`serverinfo.cgi`, `devtype.cgi`, `mdattr.cgi`,

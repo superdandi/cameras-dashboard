@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS cameras (
     has_ptz     INTEGER DEFAULT 1,
     enabled     INTEGER DEFAULT 1,
     notes       TEXT DEFAULT '',
+    display_order INTEGER DEFAULT 0,
     created_at  TEXT DEFAULT (datetime('now')),
     updated_at  TEXT DEFAULT (datetime('now'))
 );
@@ -40,6 +41,16 @@ CREATE TABLE IF NOT EXISTS events (
     ts         TEXT DEFAULT (datetime('now')),
     type       TEXT,
     payload    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS camera_stream_state (
+    camera_id      INTEGER PRIMARY KEY,
+    live_since     INTEGER DEFAULT 0,
+    last_cut_at    INTEGER DEFAULT 0,
+    prev_bytes     INTEGER DEFAULT 0,
+    stall          INTEGER DEFAULT 0,
+    was_streaming  INTEGER DEFAULT 0,
+    updated_at     TEXT DEFAULT (datetime('now'))
 );
 """
 
@@ -59,7 +70,20 @@ def get_db() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with get_db() as db:
         db.executescript(SCHEMA)
+    _migrate()
     _seed_defaults()
+
+
+def _migrate() -> None:
+    """Migraciones incrementales seguras (ALTER TABLE IF)."""
+    with get_db() as db:
+        cols = {r[1] for r in db.execute("PRAGMA table_info(cameras)").fetchall()}
+        if "display_order" not in cols:
+            db.execute("ALTER TABLE cameras ADD COLUMN display_order INTEGER DEFAULT 0")
+            # Solo inicializar display_order cuando se añade la columna por primera vez
+            rows = db.execute("SELECT id FROM cameras ORDER BY id").fetchall()
+            for i, r in enumerate(rows):
+                db.execute("UPDATE cameras SET display_order=? WHERE id=?", (i, r["id"]))
 
 
 def _seed_defaults() -> None:

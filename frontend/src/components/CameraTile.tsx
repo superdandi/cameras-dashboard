@@ -23,7 +23,7 @@ export default function CameraTile({ camera, active, preferMain, onSelect }: Pro
       onClick={() => onSelect(camera)}
       title={`${camera.name} — ${camera.location}`}
     >
-      {mode === 'webrtc' && <video ref={videoRef} muted autoPlay playsInline />}
+      <video ref={videoRef} muted autoPlay playsInline style={{ display: mode === 'webrtc' ? '' : 'none' }} />
       {mode === 'mjpeg' && <img src={mjpegSrc} alt={camera.name} />}
       {mode === 'off' && (
         <img src={snapshotUrl(camera.id)} alt={camera.name} className="opacity-90" />

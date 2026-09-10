@@ -177,6 +177,23 @@ de pasar a rediseño de UI y personalización de la transmisión.
 
 ---
 
+## Hito v2.0.0 (2026-09-09)
+
+**Sistema de modos (SENTINEL V2) en su estado actual** — documentado como siguiente
+versión. Detalle completo en `docs/CHANGELOG.md`.
+
+- **Núcleo**: sistema de modos `cyberpunk | vigilancia` reemplaza las skins v1
+  (legacy en `frontend/src/legacy/`); registry `MODES`, `ModeContext`.
+- **Vigilancia**: selección por teclado (`1-4`), vista **solo-cámara** (Enter/Escape),
+  **zoom digital**, audio por cámara en store compartido.
+- **Cyberpunk**: esferas 3D con **cámara lateral "sala de monitoreo"**, vista mosaico 3D
+  con atajos (`T` PTZ, flechas con hold, `S` audio), boot WebGL2.
+- **Rendimiento**: `/api/status` derivado de go2rtc streams (sin frames secuenciales).
+
+**En curso**: floor plan / mini-map — ver `docs/PLAN-FLOOR-MAP.md`.
+
+---
+
 ## Seguridad (recomendado)
 
 - Credenciales de cámaras **únicas y fuertes** (cambiadas desde la app EseeCloud).

@@ -9,32 +9,61 @@ interface TwitchStatus {
   started_at?: string;
   pid?: number;
   last_code?: number;
+  audio_source?: string;
 }
+
+interface AudioDevice {
+  name: string;
+  description: string;
+  state: string;
+}
+
+const AUDIO_SOURCES = [
+  { value: 'none', label: 'Sin audio' },
+  { value: 'camera', label: 'Cámara (mic)' },
+  { value: 'device', label: 'Entrada del servidor' },
+  { value: 'file', label: 'Archivo local (loop)' },
+] as const;
 
 export default function TwitchPanel() {
   const [cams, setCams] = useState<Camera[]>([]);
   const [st, setSt] = useState<TwitchStatus>({ running: false });
   const [sel, setSel] = useState<number[]>([]);
   const [useSub, setUseSub] = useState(true);
-  const [cfg, setCfg] = useState({ key: '', url: '', audio: '', bitrate: '2500k', width: 1280, height: 720 });
+  const [cfg, setCfg] = useState({
+    key: '', url: '', audio: '', audio_source: 'none', audio_camera_id: 0,
+    audio_device: 'default', audio_gain: '0',
+    bitrate: '2500k', width: 1280, height: 720,
+  });
   const [msg, setMsg] = useState('');
+  const [devices, setDevices] = useState<AudioDevice[]>([]);
 
   const refresh = useCallback(() => {
-    api.twitchStatus().then(setSt).catch(() => {});
+    api.twitchStatus().then((d) => setSt(d as unknown as TwitchStatus)).catch(() => {});
   }, []);
+
+  const loadDevices = useCallback(() => {
+    api.twitchAudioDevices().then((d) => setDevices((d.devices || []) as AudioDevice[])).catch(() => {});
+  }, []);
+
   useEffect(() => {
-    api.listCameras().then((c) => { setCams(c); setSel((s) => (s.length ? s : c.filter((x) => x.enabled).map((x) => x.id))); }).catch(() => {});
-    api.twitchConfig().then((c) => setCfg({ key: '', ...c })).catch(() => {});
+    api.listCameras().then((c) => {
+      setCams(c);
+      setSel((s) => (s.length ? s : c.filter((x) => x.enabled).map((x) => x.id)));
+    }).catch(() => {});
+    api.twitchConfig().then((c) => setCfg((prev) => ({ ...prev, ...(c as Record<string, unknown>) }))).catch(() => {});
     refresh();
+    loadDevices();
     const t = setInterval(refresh, 5000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, loadDevices]);
 
   const start = async () => {
     setMsg('');
     try {
+      await api.twitchConfigSave(cfg);
       const r = await api.twitchStart(sel, useSub);
-      setMsg(r.error ?? `Iniciado (pid ${r.pid})`);
+      setMsg((r.error as string) ?? `Iniciado (pid ${r.pid})`);
       refresh();
     } catch (e) {
       setMsg(String((e as Error).message));
@@ -44,7 +73,7 @@ export default function TwitchPanel() {
     setMsg('');
     try {
       const r = await api.twitchStop();
-      setMsg(r.error ?? 'Detenido');
+      setMsg((r.error as string) ?? 'Detenido');
       refresh();
     } catch (e) {
       setMsg(String((e as Error).message));
@@ -63,6 +92,8 @@ export default function TwitchPanel() {
   const toggle = (id: number) =>
     setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
+  const audioSrc = cfg.audio_source || 'none';
+
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -75,7 +106,10 @@ export default function TwitchPanel() {
       {st.running && (
         <div className="rounded-xl bg-panel p-3 text-sm">
           <div className="text-fg">Stream activo (pid {st.pid})</div>
-          <div className="text-xs text-muted">Iniciado {st.started_at} · {st.cameras?.length} cámaras · {st.use_sub ? 'sub-stream' : 'main-stream'}</div>
+          <div className="text-xs text-muted">
+            Iniciado {st.started_at} · {st.cameras?.length} cámaras · {st.use_sub ? 'sub-stream' : 'main-stream'}
+            {st.audio_source && st.audio_source !== 'none' && ` · audio: ${st.audio_source}`}
+          </div>
         </div>
       )}
 
@@ -96,6 +130,89 @@ export default function TwitchPanel() {
       </div>
 
       <div className="rounded-xl bg-panel p-3">
+        <div className="mb-2 text-sm font-semibold text-fg">Fuente de audio</div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            Fuente
+            <select
+              value={audioSrc}
+              onChange={(e) => setCfg((c) => ({ ...c, audio_source: e.target.value }))}
+              disabled={st.running}
+              className="rounded bg-muted/10 px-2 py-1.5 text-sm text-fg"
+            >
+              {AUDIO_SOURCES.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+          </label>
+
+          {audioSrc === 'camera' && (
+            <label className="flex flex-col gap-1 text-xs text-muted">
+              Cámara con audio
+              <select
+                value={cfg.audio_camera_id}
+                onChange={(e) => setCfg((c) => ({ ...c, audio_camera_id: Number(e.target.value) }))}
+                disabled={st.running}
+                className="rounded bg-muted/10 px-2 py-1.5 text-sm text-fg"
+              >
+                <option value={0}>Seleccionar cámara…</option>
+                {cams.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {audioSrc === 'device' && (
+            <>
+              <label className="flex flex-col gap-1 text-xs text-muted">
+                Dispositivo de captura
+                <select
+                  value={cfg.audio_device}
+                  onChange={(e) => setCfg((c) => ({ ...c, audio_device: e.target.value }))}
+                  disabled={st.running}
+                  className="rounded bg-muted/10 px-2 py-1.5 text-sm text-fg"
+                >
+                  {devices.length === 0 && <option value="default">default</option>}
+                  {devices.map((d) => (
+                    <option key={d.name} value={d.name}>{d.description || d.name}</option>
+                  ))}
+                </select>
+              </label>
+              <button onClick={loadDevices} disabled={st.running} className="self-end rounded bg-muted/10 px-3 py-1.5 text-xs text-muted hover:bg-muted/20 disabled:opacity-40">
+                ↻ Refrescar dispositivos
+              </button>
+            </>
+          )}
+
+          {audioSrc === 'file' && (
+            <label className="flex flex-col gap-1 text-xs text-muted">
+              Archivo de audio (loop)
+              <input
+                value={cfg.audio}
+                onChange={(e) => setCfg((c) => ({ ...c, audio: e.target.value }))}
+                placeholder="/ruta/musica.mp3"
+                className="rounded bg-muted/10 px-2 py-1.5 text-sm text-fg"
+              />
+            </label>
+          )}
+
+          {audioSrc !== 'none' && (
+            <label className="flex flex-col gap-1 text-xs text-muted">
+              Ganancia (dB)
+              <input
+                type="number"
+                value={cfg.audio_gain}
+                onChange={(e) => setCfg((c) => ({ ...c, audio_gain: e.target.value }))}
+                placeholder="0"
+                className="rounded bg-muted/10 px-2 py-1.5 text-sm text-fg"
+              />
+            </label>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl bg-panel p-3">
         <div className="mb-2 text-sm font-semibold text-fg">Configuración</div>
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-xs text-muted">
@@ -105,10 +222,6 @@ export default function TwitchPanel() {
           <label className="flex flex-col gap-1 text-xs text-muted">
             URL ingest
             <input value={cfg.url} onChange={(e) => setCfg((c) => ({ ...c, url: e.target.value }))} className="rounded bg-muted/10 px-2 py-1.5 text-sm text-fg" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
-            Archivo de audio (loop, opcional)
-            <input value={cfg.audio} onChange={(e) => setCfg((c) => ({ ...c, audio: e.target.value }))} placeholder="/ruta/musica.mp3" className="rounded bg-muted/10 px-2 py-1.5 text-sm text-fg" />
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted">
             Bitrate de video

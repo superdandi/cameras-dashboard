@@ -1,7 +1,7 @@
 {
   "name": "SENTINEL // Dashboard",
   "short_name": "SENTINEL",
-  "description": "Dashboard de vigilancia cámaras ATSG (<HOSTNAME>)",
+  "description": "SENTINEL — Dashboard local de vigilancia por cámaras",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#050812",

@@ -78,6 +78,55 @@ def check_go2rtc() -> dict:
     return {"ok": False, "streams": []}
 
 
+def stream_health(stream: str) -> dict | None:
+    """Estado de un stream desde go2rtc sin pedir frames (rápido).
+
+    Devuelve None si go2rtc no está arriba o el stream no tiene producer activo.
+    """
+    st, body, _ = _http_get(f"{GO2RTC_API}/api/streams", timeout=3)
+    if st != 200:
+        return None
+    try:
+        streams = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return None
+    s = streams.get(stream)
+    if not s:
+        return None
+    prods = s.get("producers") or []
+    if not prods:
+        return None
+    return {
+        "stream": stream,
+        "ok": True,
+        "status": st,
+        "bytes": sum(p.get("bytes_recv", 0) for p in prods),
+    }
+
+
+def stream_health_map(timeout: float = 3) -> dict[str, dict]:
+    """Mapea {nombre_de_stream: estado} desde go2rtc en UNA sola llamada."""
+    st, body, _ = _http_get(f"{GO2RTC_API}/api/streams", timeout=timeout)
+    if st != 200:
+        return {}
+    try:
+        streams = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {}
+    for name, s in streams.items():
+        prods = s.get("producers") or []
+        if not prods:
+            continue
+        out[name] = {
+            "stream": name,
+            "ok": True,
+            "status": st,
+            "bytes": sum(p.get("bytes_recv", 0) for p in prods),
+        }
+    return out
+
+
 def check_stream(stream: str, width: int = 320) -> dict:
     st, body, _ = _http_get(f"{GO2RTC_API}/api/frame.jpeg?src={stream}&width={width}", timeout=8)
     ok = st == 200 and body[:2] == b"\xff\xd8"

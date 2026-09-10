@@ -12,6 +12,7 @@ export interface Camera {
   has_ptz: boolean;
   enabled: boolean;
   notes: string;
+  display_order?: number;
   created_at?: string;
 }
 
@@ -41,6 +42,8 @@ export interface CamStatus {
   ok: boolean;
   status: number;
   bytes: number;
+  live_since: number;
+  last_cut_at: number;
 }
 
 export interface Health {
